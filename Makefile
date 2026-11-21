@@ -1,4 +1,4 @@
-# Rota — common tasks. Run `make` or `make help` to list targets.
+# Aries Proxy — common tasks. Run `make` or `make help` to list targets.
 
 .DEFAULT_GOAL := help
 
@@ -28,7 +28,7 @@ ps: ## Show service status
 
 password: ## Print the first-boot admin password from the core logs
 	@docker compose logs aries-core 2>/dev/null | grep -i "Generated admin password" \
-		|| echo "No generated password found (you set ROTA_ADMIN_PASSWORD, or it's already seeded)."
+		|| echo "No generated password found (you set ARIES_ADMIN_PASSWORD, or it's already seeded)."
 
 dev-core: ## Run the Go core locally (needs a running TimescaleDB)
 	cd core && go run ./cmd/server

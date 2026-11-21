@@ -2,7 +2,7 @@
 
 Editorial SVG diagrams for the project README, drawn with the
 [diagram-design](https://github.com/cathrynlavery/diagram-design) grammar and
-Rota's brand tokens (navy accent, light + dark variants).
+Aries Proxy brand tokens (navy accent, light + dark variants).
 
 | Diagram | Source | Exported to |
 |---|---|---|

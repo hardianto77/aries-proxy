@@ -1,4 +1,4 @@
-// Package main provides the entry point for the Rota Proxy Server
+// Package main provides the entry point for the Aries Proxy Server
 //
 //	@title			Aries Proxy API
 //	@version		1.0.0

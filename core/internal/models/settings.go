@@ -15,7 +15,7 @@ type Settings struct {
 
 // AuthenticationSettings represents proxy server authentication configuration
 // This controls authentication for incoming requests to the PROXY server (port 8000)
-// NOT for dashboard/API login (which uses ROTA_ADMIN_USER/ROTA_ADMIN_PASSWORD)
+// NOT for dashboard/API login (which uses ARIES_ADMIN_USER/ARIES_ADMIN_PASSWORD)
 type AuthenticationSettings struct {
 	Enabled  bool   `json:"enabled"`  // Enable authentication for proxy requests
 	Username string `json:"username"` // Username for proxy authentication

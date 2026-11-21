@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Rota's README diagrams (diagram-design skill grammar, Rota brand tokens).
+"""Generate Aries Proxy README diagrams (diagram-design skill grammar, Aries Proxy brand tokens).
 Emits light + dark HTML into docs/diagrams/. PNGs are rendered separately."""
 import pathlib
 
@@ -102,7 +102,7 @@ def architecture(variant):
     t = TOKENS[variant]
     slug = "architecture" + ("-dark" if variant == "dark" else "")
     s = f'''    <svg viewBox="0 0 1000 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="{slug}-title {slug}-desc">
-      <title id="{slug}-title">Rota in production</title>
+      <title id="{slug}-title">Aries Proxy in production</title>
       <desc id="{slug}-desc">Architecture diagram: an admin browser reaches Caddy, which serves the dashboard and forwards API and WebSocket calls to the Go core; the core stores state in TimescaleDB, and the same core accepts client traffic on port 8000 and rotates it through the upstream proxy pool.</desc>
 {defs(t)}
 
@@ -133,7 +133,7 @@ def architecture(variant):
     s += node(t, 40, 232, 128, 64, "input", "EXT", "Admin browser", "dashboard · :80 / :443")
     s += node(t, 240, 232, 144, 64, "ext", "EDGE", "Caddy", "one origin · auto-HTTPS")
     s += node(t, 456, 112, 176, 64, "backend", "UI", "Dashboard", "Next.js · same-origin")
-    s += node(t, 456, 232, 176, 72, "focal", "GO", "Rota core", "API :8001 · proxy :8000")
+    s += node(t, 456, 232, 176, 72, "focal", "GO", "Aries Proxy core", "API :8001 · proxy :8000")
     s += node(t, 728, 232, 160, 72, "store", "DB", "TimescaleDB", "proxies · pools · requests")
     s += node(t, 40, 392, 128, 64, "input", "EXT", "Your clients", "curl · scrapers · bots")
     s += node(t, 728, 392, 160, 64, "ext", "POOL", "Upstream proxies", "HTTP · SOCKS4 · SOCKS5")
@@ -144,7 +144,7 @@ def architecture(variant):
         <line x1="40" y1="468" x2="960" y2="468" stroke="{t['rule']}" stroke-width="0.8"/>
 '''
     x = 40
-    s += legend_item(t, x, ly, swatch_rect(t, x, ly, t["accent_tint"], t["accent"]), "Rota (one Go process)"); x += 168
+    s += legend_item(t, x, ly, swatch_rect(t, x, ly, t["accent_tint"], t["accent"]), "Aries Proxy (one Go process)"); x += 168
     s += legend_item(t, x, ly, swatch_rect(t, x, ly, t["backend_fill"], t["ink"]), "Service"); x += 96
     s += legend_item(t, x, ly, swatch_rect(t, x, ly, t["store_fill"], t["muted"]), "Store"); x += 88
     s += legend_item(t, x, ly, swatch_rect(t, x, ly, t["ext_fill"], t["ext_stroke"]), "Edge / external"); x += 136
@@ -152,7 +152,7 @@ def architecture(variant):
     s += f'        <line x1="{x}" y1="{ly+5}" x2="{x+28}" y2="{ly+5}" stroke="{t["link"]}" stroke-width="1.2" marker-end="url(#arrow-link)"/>\n        <text x="{x+36}" y="{ly+8}" fill="{t["muted"]}" font-size="8.5" font-family="{SANS}">HTTPS</text>\n'; x += 92
     s += f'        <line x1="{x}" y1="{ly+5}" x2="{x+28}" y2="{ly+5}" stroke="{t["accent"]}" stroke-width="1.4" marker-end="url(#arrow-accent)"/>\n        <text x="{x+36}" y="{ly+8}" fill="{t["muted"]}" font-size="8.5" font-family="{SANS}">Proxied traffic</text>\n'
     s += "      </svg>"
-    return page("Rota · Architecture", "Architecture · Rota", "Rota in production", s, t)
+    return page("Aries Proxy · Architecture", "Architecture · Aries Proxy", "Aries Proxy in production", s, t)
 
 # ────────────────────────────────────────────────────────────── routing
 def oval(t, x, y, w, h, name, sub=None, focal=False):
@@ -243,7 +243,7 @@ def routing(variant):
     s += f'        <line x1="{x}" y1="{ly+6}" x2="{x+28}" y2="{ly+6}" stroke="{m}" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>\n        <text x="{x+36}" y="{ly+10}" fill="{m}" font-size="8.5" font-family="{SANS}">Loop</text>\n'; x += 96
     s += f'        <line x1="{x}" y1="{ly+6}" x2="{x+28}" y2="{ly+6}" stroke="{t["accent"]}" stroke-width="1.4" marker-end="url(#arrow-accent)"/>\n        <text x="{x+36}" y="{ly+10}" fill="{m}" font-size="8.5" font-family="{SANS}">Happy path</text>\n'
     s += "      </svg>"
-    return page("Rota · Request routing", "Flowchart · Rota", "How a request is routed", s, t)
+    return page("Aries Proxy · Request routing", "Flowchart · Aries Proxy", "How a request is routed", s, t)
 
 OUT.mkdir(parents=True, exist_ok=True)
 for variant in ("light", "dark"):

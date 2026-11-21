@@ -48,7 +48,7 @@ jobs:
           username: ${{ github.actor }}
           # Use the auto-provided GITHUB_TOKEN (scoped by the job's
           # `packages: write` permission) instead of a hand-maintained PAT that
-          # expires. Requires the ghcr.io/<owner>/rota package to grant this repo
+          # expires. Requires the ghcr.io/hardianto77/aries-proxy package to grant this repo
           # write access (Package settings → Manage Actions access).
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -63,7 +63,7 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
-            org.opencontainers.image.title=Rota Core
+            org.opencontainers.image.title=Aries Proxy Core
             org.opencontainers.image.description=Rota proxy rotation service
             org.opencontainers.image.vendor=${{ github.repository_owner }}
 
@@ -134,7 +134,7 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
-            org.opencontainers.image.title=Rota Dashboard
+            org.opencontainers.image.title=Aries Proxy Dashboard
             org.opencontainers.image.description=Rota proxy rotation dashboard
             org.opencontainers.image.vendor=${{ github.repository_owner }}
 
@@ -205,12 +205,12 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ github.ref_name }}"
-          NAME="rota_${TAG}_${GOOS}_${GOARCH}"
+          NAME="aries-proxy_${TAG}_${GOOS}_${GOARCH}"
           EXT=""; [ "$GOOS" = "windows" ] && EXT=".exe"
           mkdir -p ../dist/"$NAME"
           go build -trimpath \
-            -ldflags="-s -w -X github.com/alpkeskin/rota/core/internal/version.Version=${TAG}" \
-            -o ../dist/"$NAME"/rota${EXT} ./cmd/server
+            -ldflags="-s -w -X github.com/aries-proxy/core/internal/version.Version=${TAG}" \
+            -o ../dist/"$NAME"/aries-proxy${EXT} ./cmd/server
           cp ../LICENSE ../.env.example ../dist/"$NAME"/
           cd ../dist
           if [ "$GOOS" = "windows" ]; then

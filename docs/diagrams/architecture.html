@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Rota · Architecture</title>
+  <title>Aries Proxy · Architecture</title>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -19,10 +19,10 @@
 </head>
 <body>
   <div class="frame">
-    <p class="eyebrow">Architecture · Rota</p>
-    <h1>Rota in production</h1>
+    <p class="eyebrow">Architecture · Aries Proxy</p>
+    <h1>Aries Proxy in production</h1>
     <svg viewBox="0 0 1000 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="architecture-title architecture-desc">
-      <title id="architecture-title">Rota in production</title>
+      <title id="architecture-title">Aries Proxy in production</title>
       <desc id="architecture-desc">Architecture diagram: an admin browser reaches Caddy, which serves the dashboard and forwards API and WebSocket calls to the Go core; the core stores state in TimescaleDB, and the same core accepts client traffic on port 8000 and rotates it through the upstream proxy pool.</desc>
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c5c5c"/></marker>
@@ -82,7 +82,7 @@
         <rect x="456" y="232" width="176" height="72" rx="6" fill="rgba(11,37,85,0.08)" stroke="#0b2555" stroke-width="1"/>
         <rect x="464" y="240" width="20" height="12" rx="2" fill="transparent" stroke="rgba(11,37,85,0.50)" stroke-width="0.8"/>
         <text x="474" y="249" fill="#0b2555" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GO</text>
-        <text x="544" y="272" fill="#111111" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Rota core</text>
+        <text x="544" y="272" fill="#111111" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Aries Proxy core</text>
         <text x="544" y="288" fill="#5c5c5c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">API :8001 · proxy :8000</text>
         <rect x="728" y="232" width="160" height="72" rx="6" fill="#ffffff"/>
         <rect x="728" y="232" width="160" height="72" rx="6" fill="rgba(17,17,17,0.05)" stroke="#5c5c5c" stroke-width="1"/>
@@ -106,7 +106,7 @@
         <!-- Legend -->
         <line x1="40" y1="468" x2="960" y2="468" stroke="rgba(17,17,17,0.12)" stroke-width="0.8"/>
         <rect x="40" y="484" width="14" height="10" rx="2" fill="rgba(11,37,85,0.08)" stroke="#0b2555" stroke-width="1"/>
-        <text x="60" y="492" fill="#5c5c5c" font-size="8.5" font-family="'Geist', sans-serif">Rota (one Go process)</text>
+        <text x="60" y="492" fill="#5c5c5c" font-size="8.5" font-family="'Geist', sans-serif">Aries Proxy (one Go process)</text>
         <rect x="208" y="484" width="14" height="10" rx="2" fill="#ffffff" stroke="#111111" stroke-width="1"/>
         <text x="228" y="492" fill="#5c5c5c" font-size="8.5" font-family="'Geist', sans-serif">Service</text>
         <rect x="304" y="484" width="14" height="10" rx="2" fill="rgba(17,17,17,0.05)" stroke="#5c5c5c" stroke-width="1"/>

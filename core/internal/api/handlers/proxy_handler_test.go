@@ -21,13 +21,13 @@ import (
 
 // openHandlerTestDB is the env-gated test database for handler integration
 // tests: proxies (migration 3 DDL) and settings (migration 4 DDL) tables,
-// both truncated. Skips when ROTA_TEST_DSN is not set.
+// both truncated. Skips when ARIES_TEST_DSN is not set.
 func openHandlerTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	dsn := os.Getenv("ROTA_TEST_DSN")
+	dsn := os.Getenv("ARIES_TEST_DSN")
 	if dsn == "" {
-		t.Skip("ROTA_TEST_DSN not set")
+		t.Skip("ARIES_TEST_DSN not set")
 	}
 
 	ctx := context.Background()
@@ -42,7 +42,7 @@ func openHandlerTestDB(t *testing.T) *pgxpool.Pool {
 	t.Cleanup(pool.Close)
 
 	// Non-destructive DDL: test packages run in parallel against the same
-	// ROTA_TEST_DSN, so the tables are created if missing and left alone
+	// ARIES_TEST_DSN, so the tables are created if missing and left alone
 	// otherwise (tests always work with freshly inserted rows).
 	const createProxies = `
 		CREATE TABLE IF NOT EXISTS proxies (

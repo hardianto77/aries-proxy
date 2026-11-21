@@ -409,7 +409,7 @@ info:
   license:
     name: LICENSE
     url: https://aries.ai.id/blob/main/LICENSE
-  title: Rota Proxy API
+  title: Aries Proxy API
   version: 1.0.0
 paths:
   /auth/login:

@@ -91,7 +91,7 @@ var migrations = []Migration{
 			('authentication', '{"enabled": false, "username": "", "password": ""}'::jsonb),
 			('rotation', '{"method": "random", "time_based": {"interval": 120}, "remove_unhealthy": true, "fallback": true, "fallback_max_retries": 10, "follow_redirect": false, "timeout": 90, "retries": 3}'::jsonb),
 			('rate_limit', '{"enabled": false, "interval": 1, "max_requests": 100}'::jsonb),
-			('healthcheck', '{"timeout": 60, "workers": 20, "url": "https://api.ipify.org", "status": 200, "headers": ["User-Agent: Rota-HealthCheck/1.0"]}'::jsonb),
+			('healthcheck', '{"timeout": 60, "workers": 20, "url": "https://api.ipify.org", "status": 200, "headers": ["User-Agent: AriesProxy-HealthCheck/1.0"]}'::jsonb),
 			('log_retention', '{"enabled": true, "retention_days": 30, "compression_after_days": 7, "cleanup_interval_hours": 24}'::jsonb)
 			ON CONFLICT (key) DO NOTHING;
 		`,

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { AppNav, MobileNav } from "@/components/shell/app-nav"
 import { api } from "@/lib/api"
 
-const STORAGE_KEY = "rota_sidebar_collapsed"
+const STORAGE_KEY = "ariesproxy_sidebar_collapsed"
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()

@@ -129,7 +129,7 @@ export function Segment({
   )
 }
 
-const LIVE_KEY = "rota:live-refresh"
+const LIVE_KEY = "ariesproxy:live-refresh"
 const LIVE_OPTIONS = [
   { value: "0", label: "Live: off" },
   { value: "5", label: "Live: 5s" },

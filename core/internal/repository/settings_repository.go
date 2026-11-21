@@ -144,7 +144,7 @@ func (r *SettingsRepository) Reset(ctx context.Context) error {
 			"workers": 20,
 			"url":     "https://api.ipify.org",
 			"status":  200,
-			"headers": []string{"User-Agent: Rota-HealthCheck/1.0"},
+			"headers": []string{"User-Agent: AriesProxy-HealthCheck/1.0"},
 		},
 		"log_retention": {
 			"enabled":                true,
