@@ -1,0 +1,132 @@
+name: aries-proxy
+services:
+  # Single entry point: serves the dashboard and proxies /api + /ws to the core.
+  # Access everything at http://localhost (or your SITE_ADDRESS domain).
+  caddy:
+    image: caddy:2-alpine
+    container_name: aries-caddy
+    restart: unless-stopped
+    ports:
+      - "10.3.24.55:80:80"
+      - "10.3.24.55:443:443"
+    environment:
+      # ":80" = plain HTTP on localhost. Set to a domain (e.g. rota.example.com)
+      # for automatic HTTPS in production.
+      - SITE_ADDRESS=${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - rota-network
+    depends_on:
+      aries-core:
+        condition: service_healthy
+
+  aries-core:
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+    container_name: aries-core
+    restart: unless-stopped
+    ports:
+      # The proxy itself is the product — keep it reachable on the host.
+      # The REST API (8001) is internal only; reach it via Caddy at /api.
+      # The container-side port must match PROXY_PORT (the core binds to it).
+      - "${PROXY_PORT:-8000}:${PROXY_PORT:-8000}"
+      - "25600:8000"
+    environment:
+      - PROXY_PORT=${PROXY_PORT:-8000}
+      - API_PORT=8001
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DB_HOST=${DB_HOST:-timescaledb}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER:-rota}
+      - DB_PASSWORD=${DB_PASSWORD:-rota_password}
+      - DB_NAME=${DB_NAME:-rota}
+      - DB_SSLMODE=${DB_SSLMODE:-disable}
+      - ROTA_ADMIN_USER=${ROTA_ADMIN_USER:-admin}
+      # Leave empty to auto-generate a strong password on first boot (printed in
+      # the core logs). Set it in .env to choose your own.
+      - ROTA_ADMIN_PASSWORD=${ROTA_ADMIN_PASSWORD:-}
+      # Optional; unset = generated once and persisted in the DB.
+      - JWT_SECRET=${JWT_SECRET:-}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
+      # The core sits behind Caddy, so trust its X-Forwarded-For for the login
+      # rate limiter's per-IP tracking. Set to false only if you expose the API
+      # directly without a trusted reverse proxy (AUD-20).
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-true}
+    networks:
+      - rota-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8001/health",
+        ]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+  aries-dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        # Empty → the dashboard calls the API same-origin through Caddy.
+        # No rebuild needed when your host/domain changes.
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
+        - NEXT_PUBLIC_PROXY_PORT=${PROXY_PORT:-8000}
+    container_name: aries-dashboard
+    restart: unless-stopped
+    # No host port — the dashboard is served through Caddy.
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
+      - NEXT_PUBLIC_PROXY_PORT=${PROXY_PORT:-8000}
+    networks:
+      - rota-network
+    depends_on:
+      aries-core:
+        condition: service_healthy
+
+  timescaledb:
+    image: timescale/timescaledb:2.22.1-pg17
+    container_name: aries-timescaledb
+    restart: unless-stopped
+    # Port intentionally NOT exposed to host — DB is internal only
+    # Use 127.0.0.1:5432:5432 only if local debug access is needed
+    environment:
+      - POSTGRES_USER=${DB_USER:-rota}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-rota_password}
+      - POSTGRES_DB=${DB_NAME:-rota}
+      - TIMESCALEDB_TELEMETRY=off
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+    networks:
+      - rota-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-rota} -d ${DB_NAME:-rota}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+volumes:
+  timescaledb-data:
+    driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local
+
+networks:
+  rota-network:
+    driver: bridge

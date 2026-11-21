@@ -1,0 +1,233 @@
+package handlers
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	"github.com/aries-proxy/core/internal/models"
+	"github.com/aries-proxy/core/internal/repository"
+	"github.com/aries-proxy/core/internal/services"
+	"github.com/aries-proxy/core/pkg/logger"
+)
+
+// SettingsHandler handles settings endpoints
+type SettingsHandler struct {
+	settingsRepo     *repository.SettingsRepository
+	logger           *logger.Logger
+	onSettingsUpdate func(ctx context.Context) // called after settings are persisted
+	geoSvc           *services.GeoIPService
+}
+
+// NewSettingsHandler creates a new SettingsHandler.
+// onUpdate is an optional callback invoked after settings are saved (e.g. to reload the proxy server).
+func NewSettingsHandler(settingsRepo *repository.SettingsRepository, log *logger.Logger, onUpdate func(ctx context.Context)) *SettingsHandler {
+	return &SettingsHandler{
+		settingsRepo:     settingsRepo,
+		logger:           log,
+		onSettingsUpdate: onUpdate,
+	}
+}
+
+// SetGeoIPService sets the GeoIP service reference.
+func (h *SettingsHandler) SetGeoIPService(geoSvc *services.GeoIPService) {
+	h.geoSvc = geoSvc
+}
+
+// SetOnUpdate sets the callback invoked after settings are persisted.
+func (h *SettingsHandler) SetOnUpdate(fn func(ctx context.Context)) {
+	h.onSettingsUpdate = fn
+}
+
+// Get handles getting current configuration
+//	@Summary		Get settings
+//	@Description	Get current system configuration
+//	@Tags			settings
+//	@Produce		json
+//	@Success		200	{object}	models.Settings	"Current settings"
+//	@Failure		500	{object}	models.ErrorResponse
+//	@Router			/settings [get]
+func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.settingsRepo.GetAll(r.Context())
+	if err != nil {
+		h.logger.Error("failed to get settings", "error", err)
+		h.errorResponse(w, http.StatusInternalServerError, "Failed to get settings")
+		return
+	}
+
+	// Never expose proxy authentication password in response
+	settings.Authentication.Password = ""
+
+	h.jsonResponse(w, http.StatusOK, settings)
+}
+
+// Update handles updating configuration
+//	@Summary		Update settings
+//	@Description	Update system configuration
+//	@Tags			settings
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		models.Settings			true	"Updated settings"
+//	@Success		200		{object}	map[string]interface{}	"Update confirmation"
+//	@Failure		400		{object}	models.ErrorResponse
+//	@Failure		500		{object}	models.ErrorResponse
+//	@Router			/settings [put]
+func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	// Decode over the current values so a client that omits a section (an
+	// older dashboard, a partial API call) does not zero it out — UpdateAll
+	// writes every section back.
+	current, err := h.settingsRepo.GetAll(r.Context())
+	if err != nil {
+		h.logger.Error("failed to load current settings", "error", err)
+		h.errorResponse(w, http.StatusInternalServerError, "Failed to load settings")
+		return
+	}
+	settings := *current
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		h.errorResponse(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	// GET never returns the proxy password, so the dashboard round-trips "".
+	// An empty password means "keep the current one", never "clear it".
+	if settings.Authentication.Password == "" {
+		settings.Authentication.Password = current.Authentication.Password
+	}
+
+	// Validate settings
+	if err := h.validateSettings(&settings); err != nil {
+		h.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Update settings
+	// Note: These settings are for PROXY server authentication (port 8000)
+	// Dashboard/API authentication uses ROTA_ADMIN_USER/ROTA_ADMIN_PASSWORD (environment)
+	if err := h.settingsRepo.UpdateAll(r.Context(), &settings); err != nil {
+		h.logger.Error("failed to update settings", "error", err)
+		h.errorResponse(w, http.StatusInternalServerError, "Failed to update settings")
+		return
+	}
+
+	// Get updated settings
+	updatedSettings, err := h.settingsRepo.GetAll(r.Context())
+	if err != nil {
+		h.logger.Error("failed to get updated settings", "error", err)
+		h.errorResponse(w, http.StatusInternalServerError, "Failed to get updated settings")
+		return
+	}
+
+	// Never expose proxy password
+	updatedSettings.Authentication.Password = ""
+
+	response := map[string]interface{}{
+		"message": "Configuration updated successfully",
+		"config":  updatedSettings,
+	}
+
+	h.logger.Info("settings updated successfully")
+
+	// Reload proxy server so changes take effect immediately
+	if h.onSettingsUpdate != nil {
+		h.onSettingsUpdate(r.Context())
+	}
+
+	h.jsonResponse(w, http.StatusOK, response)
+}
+
+// Reset handles resetting configuration to defaults
+//	@Summary		Reset settings
+//	@Description	Reset configuration to default values
+//	@Tags			settings
+//	@Produce		json
+//	@Success		200	{object}	map[string]interface{}	"Reset confirmation"
+//	@Failure		500	{object}	models.ErrorResponse
+//	@Router			/settings/reset [post]
+func (h *SettingsHandler) Reset(w http.ResponseWriter, r *http.Request) {
+	if err := h.settingsRepo.Reset(r.Context()); err != nil {
+		h.logger.Error("failed to reset settings", "error", err)
+		h.errorResponse(w, http.StatusInternalServerError, "Failed to reset settings")
+		return
+	}
+
+	settings, err := h.settingsRepo.GetAll(r.Context())
+	if err != nil {
+		h.logger.Error("failed to get settings after reset", "error", err)
+		h.errorResponse(w, http.StatusInternalServerError, "Failed to get settings")
+		return
+	}
+
+	response := map[string]interface{}{
+		"message": "Configuration reset to defaults",
+		"config":  settings,
+	}
+
+	h.jsonResponse(w, http.StatusOK, response)
+}
+
+// UpdateGeoIPDB handles manual trigger for downloading & updating MaxMind GeoIP database
+func (h *SettingsHandler) UpdateGeoIPDB(w http.ResponseWriter, r *http.Request) {
+	if h.geoSvc == nil {
+		h.errorResponse(w, http.StatusInternalServerError, "GeoIP service not configured")
+		return
+	}
+
+	if err := h.geoSvc.DownloadAndUpdateDB(r.Context()); err != nil {
+		h.logger.Error("failed to download maxmind geoip db", "error", err)
+		h.errorResponse(w, http.StatusBadRequest, fmt.Sprintf("Failed to update MaxMind GeoIP DB: %v", err))
+		return
+	}
+
+	h.jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"message": "MaxMind GeoIP database updated successfully",
+	})
+}
+
+// validateSettings validates settings configuration
+func (h *SettingsHandler) validateSettings(s *models.Settings) error {
+	// Validate rotation timeout
+	if s.Rotation.Timeout < 1 || s.Rotation.Timeout > 300 {
+		return fmt.Errorf("rotation.timeout must be between 1 and 300")
+	}
+
+	// Validate rotation retries
+	if s.Rotation.Retries < 0 || s.Rotation.Retries > 10 {
+		return fmt.Errorf("rotation.retries must be between 0 and 10")
+	}
+
+	// Validate healthcheck timeout
+	if s.HealthCheck.Timeout < 1 || s.HealthCheck.Timeout > 300 {
+		return fmt.Errorf("healthcheck.timeout must be between 1 and 300")
+	}
+
+	// Validate healthcheck workers
+	if s.HealthCheck.Workers < 1 || s.HealthCheck.Workers > 100 {
+		return fmt.Errorf("healthcheck.workers must be between 1 and 100")
+	}
+
+	// Validate GeoIP provider
+	if s.GeoIP.Provider != "" && s.GeoIP.Provider != "ip-api" && s.GeoIP.Provider != "maxmind" {
+		return fmt.Errorf("geoip.provider must be either 'ip-api' or 'maxmind'")
+	}
+
+	if s.GeoIP.UpdateIntervalHours < 0 {
+		return fmt.Errorf("geoip.update_interval_hours must be non-negative")
+	}
+
+	return nil
+}
+
+// jsonResponse sends a JSON response
+func (h *SettingsHandler) jsonResponse(w http.ResponseWriter, statusCode int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(data)
+}
+
+// errorResponse sends an error JSON response
+func (h *SettingsHandler) errorResponse(w http.ResponseWriter, statusCode int, message string) {
+	response := models.ErrorResponse{
+		Error: message,
+	}
+	h.jsonResponse(w, statusCode, response)
+}

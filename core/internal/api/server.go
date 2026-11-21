@@ -1,0 +1,445 @@
+package api
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/aries-proxy/core/internal/api/handlers"
+	"github.com/aries-proxy/core/internal/config"
+	"github.com/aries-proxy/core/internal/database"
+	"github.com/aries-proxy/core/internal/proxy"
+	"github.com/aries-proxy/core/internal/repository"
+	"github.com/aries-proxy/core/internal/services"
+	"github.com/aries-proxy/core/pkg/logger"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+
+	"github.com/aries-proxy/core/docs"
+
+	// Import for swagger documentation
+	_ "github.com/aries-proxy/core/internal/models"
+)
+
+// ProxyServer interface for reloading proxy pool
+type ProxyServer interface {
+	ReloadSettings(ctx context.Context) error
+}
+
+// Server represents the API server
+type Server struct {
+	router            *chi.Mux
+	server            *http.Server
+	logger            *logger.Logger
+	db                *database.DB
+	port              int
+	jwtSecret         string
+	authRL            *authRateLimiter
+	corsOrigins       []string
+	trustProxyHeaders bool
+
+	// Proxy server reference for reloading
+	proxyServer ProxyServer
+
+	// cancelServices stops all background services (source/pool/alert/cleanup)
+	// on shutdown, before the DB connection is closed (see AUD-6).
+	cancelServices context.CancelFunc
+
+	// Handlers
+	authHandler          *handlers.AuthHandler
+	healthHandler        *handlers.HealthHandler
+	dashboardHandler     *handlers.DashboardHandler
+	proxyHandler         *handlers.ProxyHandler
+	logsHandler          *handlers.LogsHandler
+	settingsHandler      *handlers.SettingsHandler
+	websocketHandler     *handlers.WebSocketHandler
+	metricsHandler       *handlers.MetricsHandler
+	documentationHandler *handlers.DocumentationHandler
+	sourceHandler        *handlers.SourceHandler
+	poolHandler          *handlers.PoolHandler
+	userHandler          *handlers.UserHandler
+}
+
+// New creates a new API server instance
+func New(cfg *config.Config, log *logger.Logger, db *database.DB) *Server {
+	// Initialize repositories
+	proxyRepo := repository.NewProxyRepository(db)
+	logRepo := repository.NewLogRepository(db)
+	settingsRepo := repository.NewSettingsRepository(db)
+	dashboardRepo := repository.NewDashboardRepository(db)
+	sourceRepo := repository.NewSourceRepository(db)
+	poolRepo := repository.NewPoolRepository(db)
+	userRepo := repository.NewUserRepository(db)
+	adminRepo := repository.NewAdminRepository(db)
+
+	// Seed admin credentials from env on first start (no-op if already seeded).
+	// If the password was auto-generated (ROTA_ADMIN_PASSWORD unset), surface it
+	// loudly in the logs — it's the only time it's ever shown.
+	if seeded, err := adminRepo.Seed(context.Background(), cfg.AdminUser, cfg.AdminPass); err != nil {
+		log.Warn("failed to seed admin credentials", "error", err)
+	} else if seeded && cfg.AdminPassGenerated {
+		log.Warn("======================================================")
+		log.Warn("Generated admin password — save it now, shown only once",
+			"username", cfg.AdminUser, "password", cfg.AdminPass)
+		log.Warn("Change it anytime via Settings → Admin Account")
+		log.Warn("======================================================")
+	}
+
+	// The JWT signing key is persisted in the database so a restart (deploy,
+	// crash, `docker restart`) does not log every dashboard session out.
+	// JWT_SECRET overrides it for operators who manage the key themselves.
+	jwtSecret := cfg.JWTSecret
+	if jwtSecret == "" {
+		secret, created, err := repository.NewSecretRepository(db).EnsureJWTSecret(context.Background())
+		if err != nil {
+			log.Warn("failed to load persisted JWT secret; sessions will not survive this restart", "error", err)
+			secret = generateJWTSecret()
+		} else if created {
+			log.Info("generated and stored a new JWT secret")
+		}
+		jwtSecret = secret
+	}
+
+	// Create usage tracker for health checks
+	tracker := proxy.NewUsageTracker(proxyRepo)
+
+	// Create health checker for testing proxies
+	healthChecker := proxy.NewHealthChecker(proxyRepo, settingsRepo, tracker, log)
+
+	// GeoIP + source + pool services
+	geoSvc := services.NewGeoIPService(settingsRepo, log)
+	sourceSvc := services.NewSourceService(sourceRepo, proxyRepo, poolRepo, geoSvc, log)
+	// NOTE: Intentionally NOT wiring healthChecker into sourceSvc or starting a
+	// global periodic health check. The global HealthChecker uses a lenient
+	// 60s timeout and was flapping pool-marked 'failed' proxies back to 'active',
+	// putting dead proxies back into rotation. Pool-level health checks (cron-
+	// scheduled per pool in PoolService) are the single source of truth.
+	poolSvc := services.NewPoolService(poolRepo, proxyRepo, log)
+
+	// Initialize handlers
+	authHandler := handlers.NewAuthHandler(settingsRepo, adminRepo, log, jwtSecret, cfg.AdminUser, cfg.AdminPass)
+	healthHandler := handlers.NewHealthHandler(db, proxyRepo, log)
+	dashboardHandler := handlers.NewDashboardHandler(dashboardRepo, proxyRepo, log)
+	proxyHandler := handlers.NewProxyHandler(proxyRepo, healthChecker, log)
+	// Drop cached upstream transports when a proxy is changed/removed so stale
+	// credentials aren't reused by the proxy engine (AUD-16).
+	proxyHandler.SetCacheInvalidator(proxy.ClearTransportCache)
+	logsHandler := handlers.NewLogsHandler(logRepo, log)
+	settingsHandler := handlers.NewSettingsHandler(settingsRepo, log, nil) // onUpdate set below
+	settingsHandler.SetGeoIPService(geoSvc)
+	websocketHandler := handlers.NewWebSocketHandler(dashboardRepo, proxyRepo, logRepo, log, cfg.CORSAllowedOrigins)
+	metricsHandler := handlers.NewMetricsHandler(log)
+	documentationHandler := handlers.NewDocumentationHandler()
+	sourceHandler := handlers.NewSourceHandler(sourceRepo, sourceSvc, log)
+	poolHandler := handlers.NewPoolHandler(poolRepo, poolSvc, log)
+	userHandler := handlers.NewUserHandler(userRepo, poolRepo, log)
+
+	// Auth rate limiter (per-IP block + global lockout)
+	authRL := newAuthRateLimiter(
+		cfg.AuthIPMaxAttempts,
+		cfg.AuthIPWindowMinutes,
+		cfg.AuthIPBlockMinutes,
+		cfg.AuthGlobalMaxPerMinute,
+		cfg.AuthGlobalLockoutMin,
+		cfg.TrustProxyHeaders,
+		log,
+	)
+
+	s := &Server{
+		router:               chi.NewRouter(),
+		logger:               log,
+		db:                   db,
+		port:                 cfg.APIPort,
+		jwtSecret:            jwtSecret,
+		authRL:               authRL,
+		corsOrigins:          cfg.CORSAllowedOrigins,
+		trustProxyHeaders:    cfg.TrustProxyHeaders,
+		authHandler:          authHandler,
+		healthHandler:        healthHandler,
+		dashboardHandler:     dashboardHandler,
+		proxyHandler:         proxyHandler,
+		logsHandler:          logsHandler,
+		settingsHandler:      settingsHandler,
+		websocketHandler:     websocketHandler,
+		metricsHandler:       metricsHandler,
+		documentationHandler: documentationHandler,
+		sourceHandler:        sourceHandler,
+		poolHandler:          poolHandler,
+		userHandler:          userHandler,
+	}
+
+	// Wire settings reload: when settings are updated via API, reload proxy server & GeoIP service
+	settingsHandler.SetOnUpdate(func(ctx context.Context) {
+		if err := geoSvc.ReloadSettings(ctx); err != nil {
+			log.Error("failed to reload geoip settings after update", "error", err)
+		}
+		if s.proxyServer != nil {
+			if err := s.proxyServer.ReloadSettings(ctx); err != nil {
+				log.Error("failed to reload proxy settings after update", "error", err)
+			} else {
+				log.Info("proxy settings reloaded after update")
+			}
+		}
+	})
+
+	// Alert watcher + proxy cleanup services
+	alertWatcher := services.NewAlertWatcher(poolRepo, log)
+	cleanupSvc := services.NewProxyCleanupService(proxyRepo, settingsRepo, log)
+
+	// Start background services under a cancellable context so they can be
+	// stopped on shutdown before the DB is closed (AUD-6). Their loops all
+	// select on ctx.Done().
+	svcCtx, cancelServices := context.WithCancel(context.Background())
+	s.cancelServices = cancelServices
+	geoSvc.StartAutoUpdate(svcCtx)
+	sourceSvc.Start(svcCtx)
+	poolSvc.Start(svcCtx)
+	alertWatcher.Start(svcCtx)
+
+	// NOTE: global StartPeriodicHealthCheck is intentionally NOT started.
+	// Its 60s timeout was too lenient and kept flapping pool-marked 'failed'
+	// proxies back to 'active', returning dead proxies to rotation.
+	// Pool-level health checks (PoolService cron) are authoritative.
+
+	cleanupSvc.Start(svcCtx)
+
+	s.setupMiddleware()
+	s.setupRoutes()
+
+	s.server = &http.Server{
+		Addr:         fmt.Sprintf(":%d", s.port),
+		Handler:      s.router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 10 * time.Minute, // health checks on large pools can take several minutes
+		IdleTimeout:  120 * time.Second,
+	}
+
+	return s
+}
+
+// setupMiddleware configures middleware for the API server
+func (s *Server) setupMiddleware() {
+	// Handle OPTIONS requests first (for CORS preflight)
+	s.router.Use(OptionsMiddleware())
+
+	// CORS middleware
+	origins := s.corsOrigins
+	if len(origins) == 0 {
+		origins = []string{"*"}
+	}
+	s.router.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   origins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
+	s.router.Use(middleware.RequestID)
+	// Only derive the client IP from X-Forwarded-For / X-Real-IP when explicitly
+	// trusting an upstream reverse proxy; otherwise a directly-exposed API would
+	// let clients spoof their apparent IP (AUD-20).
+	if s.trustProxyHeaders {
+		s.router.Use(middleware.RealIP)
+	}
+	s.router.Use(LoggerMiddleware(s.logger))
+	s.router.Use(middleware.Recoverer)
+	// No global timeout — health-check routes need minutes; individual routes handle their own timeouts
+}
+
+// setupRoutes configures all API routes
+func (s *Server) setupRoutes() {
+	// ── Fully public routes ────────────────────────────────────────────────
+	s.router.Get("/health", s.healthHandler.Health)
+
+	// API Documentation (public — read-only reference)
+	s.router.Get("/docs", s.documentationHandler.ServeDocumentation)
+	s.router.Get("/api/v1/swagger.json", s.serveSwaggerJSON)
+
+	// Working Proxy Pool Export (public endpoint authenticated via URL query params)
+	s.router.Get("/api/v1/proxy-users/export-working-proxies", s.userHandler.ExportWorkingProxies)
+	s.router.Get("/api/v1/users/working-proxies", s.userHandler.ExportWorkingProxies)
+
+	// Auth: only login is public; everything else requires a valid JWT
+	// Auth rate limiter wraps the login handler — per-IP block + global lockout
+	s.router.With(s.authRL.Middleware()).Post("/api/v1/auth/login", s.authHandler.Login)
+
+	// ── Protected routes (JWT required) ────────────────────────────────────
+	s.router.Route("/api/v1", func(r chi.Router) {
+		r.Use(JWTMiddleware(s.jwtSecret))
+
+		// Auth (require token — change-password, whoami)
+		r.Post("/auth/change-password", s.authHandler.ChangePassword)
+		r.Get("/auth/me", s.authHandler.GetAdminInfo)
+
+		// Health & Status
+		r.Get("/status", s.healthHandler.Status)
+		r.Get("/database/health", s.healthHandler.DatabaseHealth)
+		r.Get("/database/stats", s.healthHandler.DatabaseStats)
+
+		// System Metrics
+		r.Get("/metrics/system", s.metricsHandler.GetSystemMetrics)
+
+		// Dashboard endpoints
+		r.Get("/dashboard/stats", s.dashboardHandler.GetStats)
+		r.Get("/dashboard/charts/response-time", s.dashboardHandler.GetResponseTimeChart)
+		r.Get("/dashboard/charts/success-rate", s.dashboardHandler.GetSuccessRateChart)
+
+		// Proxy management
+		r.Get("/proxies", s.proxyHandler.List)
+		r.Post("/proxies", s.proxyHandler.Create)
+		r.Post("/proxies/bulk", s.proxyHandler.BulkCreate)
+		r.Post("/proxies/bulk-delete", s.proxyHandler.BulkDelete)
+		r.Post("/proxies/bulk-tags", s.proxyHandler.BulkTag)
+		r.Delete("/proxies", s.proxyHandler.DeleteAll)
+		r.Get("/proxies/export", s.proxyHandler.Export)
+		r.Put("/proxies/{id}", s.proxyHandler.Update)
+		r.Delete("/proxies/{id}", s.proxyHandler.Delete)
+		r.Post("/proxies/{id}/test", s.proxyHandler.Test)
+		r.Post("/proxies/reload", s.ReloadProxyPool)
+
+		// System logs
+		r.Get("/logs", s.logsHandler.List)
+		r.Get("/logs/export", s.logsHandler.Export)
+
+		// Settings
+		r.Get("/settings", s.settingsHandler.Get)
+		r.Put("/settings", s.settingsHandler.Update)
+		r.Post("/settings/reset", s.settingsHandler.Reset)
+		r.Post("/settings/geoip/update-db", s.settingsHandler.UpdateGeoIPDB)
+
+		// Proxy Sources
+		r.Get("/sources", s.sourceHandler.List)
+		r.Post("/sources", s.sourceHandler.Create)
+		r.Put("/sources/{id}", s.sourceHandler.Update)
+		r.Delete("/sources/{id}", s.sourceHandler.Delete)
+		r.Post("/sources/{id}/fetch", s.sourceHandler.FetchNow)
+		r.Post("/sources/enrich-geo", s.sourceHandler.EnrichGeo)
+
+		// Proxy Users (per-user pool authentication)
+		r.Get("/proxy-users", s.userHandler.List)
+		r.Post("/proxy-users", s.userHandler.Create)
+		r.Get("/proxy-users/{id}", s.userHandler.Get)
+		r.Put("/proxy-users/{id}", s.userHandler.Update)
+		r.Delete("/proxy-users/{id}", s.userHandler.Delete)
+
+		// Proxy Pools
+		r.Get("/pools", s.poolHandler.List)
+		r.Post("/pools", s.poolHandler.Create)
+		r.Get("/pools/geo-summary", s.poolHandler.GeoSummary)
+		r.Get("/pools/geo-countries", s.poolHandler.GeoByCountry)
+		r.Get("/pools/geo-cities/{country_code}", s.poolHandler.GeoCitiesByCountry)
+		r.Get("/pools/isp-list", s.poolHandler.GetISPList)
+		r.Get("/pools/tag-list", s.poolHandler.GetTagList)
+		r.Get("/pools/{id}", s.poolHandler.Get)
+		r.Put("/pools/{id}", s.poolHandler.Update)
+		r.Delete("/pools/{id}", s.poolHandler.Delete)
+		r.Get("/pools/{id}/proxies", s.poolHandler.GetProxies)
+		r.Post("/pools/{id}/proxies", s.poolHandler.AddProxies)
+		r.Delete("/pools/{id}/proxies", s.poolHandler.RemoveProxies)
+		r.Post("/pools/{id}/sync", s.poolHandler.Sync)
+		r.Get("/pools/{id}/export", s.poolHandler.Export)
+		r.Post("/pools/{id}/health-check", s.poolHandler.HealthCheck)
+		r.Get("/pools/{id}/health-check/jobs", s.poolHandler.HealthCheckJobs)
+		r.Get("/pools/{id}/health-check/{job_id}", s.poolHandler.HealthCheckStatus)
+		// Alert rules
+		r.Get("/pools/{id}/alert-rules", s.poolHandler.ListAlertRules)
+		r.Post("/pools/{id}/alert-rules", s.poolHandler.CreateAlertRule)
+		r.Put("/pools/{id}/alert-rules/{rule_id}", s.poolHandler.UpdateAlertRule)
+		r.Delete("/pools/{id}/alert-rules/{rule_id}", s.poolHandler.DeleteAlertRule)
+	})
+
+	// WebSocket routes — protected via token query param
+	s.router.With(JWTMiddleware(s.jwtSecret)).Get("/ws/dashboard", s.websocketHandler.DashboardWebSocket)
+	s.router.With(JWTMiddleware(s.jwtSecret)).Get("/ws/logs", s.websocketHandler.LogsWebSocket)
+}
+
+// Start starts the API server
+func (s *Server) Start() error {
+	s.logger.Info("starting API server", "port", s.port)
+
+	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("API server failed: %w", err)
+	}
+
+	return nil
+}
+
+// Shutdown gracefully shuts down the API server
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.logger.Info("shutting down API server")
+	// Stop background services first so no goroutine is mid-query when the
+	// DB connection is closed by main() after Shutdown returns (AUD-6).
+	if s.cancelServices != nil {
+		s.cancelServices()
+	}
+	return s.server.Shutdown(ctx)
+}
+
+// SetProxyServer sets the proxy server reference after initialization
+func (s *Server) SetProxyServer(ps ProxyServer) {
+	s.proxyServer = ps
+}
+
+// ReloadProxyPool reloads the proxy pool from database
+//
+//	@Summary		Reload proxy pool
+//	@Description	Reload proxy pool from database
+//	@Tags			proxies
+//	@Produce		json
+//	@Success		200	{object}	map[string]interface{}	"Reload confirmation"
+//	@Failure		500	{object}	models.ErrorResponse
+//	@Failure		503	{object}	models.ErrorResponse
+//	@Router			/proxies/reload [post]
+func (s *Server) ReloadProxyPool(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if s.proxyServer == nil {
+		s.logger.Error("proxy server not initialized")
+		http.Error(w, "proxy server not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	s.logger.Info("reloading proxy pool via API request")
+
+	if err := s.proxyServer.ReloadSettings(ctx); err != nil {
+		s.logger.Error("failed to reload proxy pool", "error", err)
+		http.Error(w, fmt.Sprintf("failed to reload proxy pool: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	s.logger.Info("proxy pool reloaded successfully")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"success","message":"Proxy pool reloaded successfully"}`))
+}
+
+// serveSwaggerJSON serves the OpenAPI spec embedded in the binary.
+// Served from memory (not the filesystem) so it works regardless of the
+// process working directory / deployment layout — see docs.SwaggerJSON (#20).
+func (s *Server) serveSwaggerJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if len(docs.SwaggerJSON) == 0 {
+		http.Error(w, "swagger spec unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Write(docs.SwaggerJSON) //nolint:errcheck
+}
+
+// generateJWTSecret generates a cryptographically secure random JWT secret
+func generateJWTSecret() string {
+	// Generate 32 random bytes (256 bits)
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		// Fallback to timestamp-based random if crypto/rand fails
+		return fmt.Sprintf("fallback-secret-%d", time.Now().UnixNano())
+	}
+
+	// Convert to hex string (64 characters)
+	return hex.EncodeToString(bytes)
+}
