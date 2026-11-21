@@ -62,6 +62,7 @@ type Server struct {
 	sourceHandler        *handlers.SourceHandler
 	poolHandler          *handlers.PoolHandler
 	userHandler          *handlers.UserHandler
+	mcpHandler           *handlers.MCPHandler
 }
 
 // New creates a new API server instance
@@ -77,7 +78,7 @@ func New(cfg *config.Config, log *logger.Logger, db *database.DB) *Server {
 	adminRepo := repository.NewAdminRepository(db)
 
 	// Seed admin credentials from env on first start (no-op if already seeded).
-	// If the password was auto-generated (ARIES_ADMIN_PASSWORD unset), surface it
+	// If the password was auto-generated (ROTA_ADMIN_PASSWORD unset), surface it
 	// loudly in the logs — it's the only time it's ever shown.
 	if seeded, err := adminRepo.Seed(context.Background(), cfg.AdminUser, cfg.AdminPass); err != nil {
 		log.Warn("failed to seed admin credentials", "error", err)
@@ -125,6 +126,7 @@ func New(cfg *config.Config, log *logger.Logger, db *database.DB) *Server {
 	healthHandler := handlers.NewHealthHandler(db, proxyRepo, log)
 	dashboardHandler := handlers.NewDashboardHandler(dashboardRepo, proxyRepo, log)
 	proxyHandler := handlers.NewProxyHandler(proxyRepo, healthChecker, log)
+	mcpHandler := handlers.NewMCPHandler(dashboardHandler, proxyHandler)
 	// Drop cached upstream transports when a proxy is changed/removed so stale
 	// credentials aren't reused by the proxy engine (AUD-16).
 	proxyHandler.SetCacheInvalidator(proxy.ClearTransportCache)
@@ -170,6 +172,7 @@ func New(cfg *config.Config, log *logger.Logger, db *database.DB) *Server {
 		sourceHandler:        sourceHandler,
 		poolHandler:          poolHandler,
 		userHandler:          userHandler,
+		mcpHandler:           mcpHandler,
 	}
 
 	// Wire settings reload: when settings are updated via API, reload proxy server & GeoIP service
@@ -276,6 +279,7 @@ func (s *Server) setupRoutes() {
 		// Auth (require token — change-password, whoami)
 		r.Post("/auth/change-password", s.authHandler.ChangePassword)
 		r.Get("/auth/me", s.authHandler.GetAdminInfo)
+			r.Post("/mcp", s.mcpHandler.ServeMCP)
 
 		// Health & Status
 		r.Get("/status", s.healthHandler.Status)

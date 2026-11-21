@@ -22,6 +22,7 @@ full web dashboard (pools, users, geo filters, live logs, metrics).
 - **Health checks** — periodic and on-demand pool testing; dead proxies are
   disabled automatically.
 - **Per-user rate limiting** — `requests_per_minute` per proxy user.
+- **MCP server built-in** — stateless Model Context Protocol endpoint (`POST /api/v1/mcp`, JSON-RPC 2.0) so AI clients (Claude, Cursor, agents) can query status, list active exits and build client URLs directly.
 - **Management REST API** — Bearer-token authenticated endpoints for users,
   pools, proxies, exports, logs and metrics (Swagger UI at `/docs`).
 - **Web dashboard** — Next.js 16 + Tailwind, responsive on desktop and mobile.

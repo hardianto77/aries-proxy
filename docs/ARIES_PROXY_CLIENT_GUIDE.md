@@ -188,3 +188,73 @@ Interactive docs: `https://proxy.aries.ai.id/docs` (Swagger UI).
 ---
 
 © Aries Proxy. All client-facing formats above are the official specification.
+
+---
+
+## 7. MCP (Model Context Protocol) Endpoint
+
+Aries Proxy ships a built-in **MCP server** so AI clients (Claude Desktop,
+Cursor, IDE agents, custom agents) can operate the proxy platform directly.
+
+**Endpoint:** `POST https://proxy.aries.ai.id/api/v1/mcp`
+**Protocol:** JSON-RPC 2.0 (MCP `2024-11-05`)
+**Auth:** `Authorization: Bearer <token>` — token from `POST /api/v1/auth/login`
+
+### 7.1 Methods
+
+| Method | Description |
+|--------|-------------|
+| `initialize` | Handshake. Returns server info (`aries-proxy`) and capabilities. |
+| `tools/list` | Lists available tools. |
+| `tools/call` | Executes a tool with arguments. |
+| `ping` | Liveness probe. |
+
+### 7.2 Tools
+
+| Tool | Description |
+|------|-------------|
+| `aries_proxy_status` | Service stats: active/total proxies, success rate, response time, request counters. |
+| `aries_proxy_list_working_proxies` | Active exit proxies (`limit` 1–100, default 20): address, protocol, country, latency. |
+| `aries_proxy_client_url` | Builds a ready-to-use `http://user:pass@host:port` URL for any client. |
+
+### 7.3 Example — list tools
+
+```bash
+curl -X POST https://proxy.aries.ai.id/api/v1/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+### 7.4 Example — build a client URL
+
+```bash
+curl -X POST https://proxy.aries.ai.id/api/v1/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"aries_proxy_client_url","arguments":{"username":"trial","password":"YOUR_PASSWORD"}}}'
+```
+
+Response (content[0].text):
+
+```json
+{"url":"http://trial:YOUR_PASSWORD@resi.aries.ai.id:25600","host":"resi.aries.ai.id","port":"25600","protocol":"http"}
+```
+
+### 7.5 MCP client configuration (Claude Desktop / generic)
+
+```json
+{
+  "mcpServers": {
+    "aries-proxy": {
+      "type": "url",
+      "url": "https://proxy.aries.ai.id/api/v1/mcp",
+      "headers": { "Authorization": "Bearer <your-management-token>" }
+    }
+  }
+}
+```
+
+> Note: obtain the token via `POST /api/v1/auth/login` first and refresh it
+> when it expires. The proxy data-plane (`user:pass@host:port`) does **not**
+> require this token — only the management/MCP plane does.

@@ -23,7 +23,7 @@ ARG TARGETARCH
 # VERSION is passed by the release workflow (the git tag); local builds report "dev".
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
-    -ldflags="-w -s -extldflags '-static' -X github.com/aries-proxy/core/core/internal/version.Version=${VERSION}" \
+    -ldflags="-w -s -extldflags '-static' -X github.com/aries-proxy/core/internal/version.Version=${VERSION}" \
     -a -installsuffix cgo \
     -o /app/bin/server \
     ./cmd/server/main.go
