@@ -78,7 +78,7 @@ func New(cfg *config.Config, log *logger.Logger, db *database.DB) *Server {
 	adminRepo := repository.NewAdminRepository(db)
 
 	// Seed admin credentials from env on first start (no-op if already seeded).
-	// If the password was auto-generated (ROTA_ADMIN_PASSWORD unset), surface it
+	// If the password was auto-generated (ARIES_ADMIN_PASSWORD unset), surface it
 	// loudly in the logs — it's the only time it's ever shown.
 	if seeded, err := adminRepo.Seed(context.Background(), cfg.AdminUser, cfg.AdminPass); err != nil {
 		log.Warn("failed to seed admin credentials", "error", err)

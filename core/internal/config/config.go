@@ -77,6 +77,9 @@ func Load() (*Config, error) {
 	// When no admin password is supplied, generate a strong random one instead
 	// of falling back to a well-known default. It's logged once on first boot.
 	adminPass := os.Getenv("ARIES_ADMIN_PASSWORD")
+	if adminPass == "" {
+		adminPass = os.Getenv("ROTA_ADMIN_PASSWORD") // legacy fallback
+	}
 	adminPassGenerated := false
 	if adminPass == "" {
 		adminPass = generateRandomSecret(12)
@@ -90,12 +93,12 @@ func Load() (*Config, error) {
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnvAsInt("DB_PORT", 5432),
-			User:     getEnv("DB_USER", "ariesproxy"),
-			Password: getEnv("DB_PASSWORD", "ariesproxy_password"),
-			Name:     getEnv("DB_NAME", "ariesproxy"),
+			User:     getEnv("DB_USER", "rota"),
+			Password: getEnv("DB_PASSWORD", "rota_password"),
+			Name:     getEnv("DB_NAME", "rota"),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
-		AdminUser:          getEnv("ARIES_ADMIN_USER", "admin"),
+		AdminUser: getEnv("ARIES_ADMIN_USER", getEnv("ROTA_ADMIN_USER", "admin")),
 		AdminPass:          adminPass,
 		AdminPassGenerated: adminPassGenerated,
 		JWTSecret:          os.Getenv("JWT_SECRET"),
@@ -111,7 +114,7 @@ func Load() (*Config, error) {
 	}
 
 	// Warn (but don't fail) when the well-known default DB password is in use.
-	if cfg.Database.Password == "ariesproxy_password" {
+	if cfg.Database.Password == "rota_password" {
 		fmt.Fprintln(os.Stderr, "config: WARNING using the default DB_PASSWORD; set DB_PASSWORD to a strong value for production")
 	}
 
